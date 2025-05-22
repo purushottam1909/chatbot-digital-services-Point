@@ -1,0 +1,398 @@
+import React, { useState, useEffect, useRef } from 'react';
+
+// Main App component for the Digital Service Point Chatbot
+const App = () => {
+    // State to store the chat messages
+    const [messages, setMessages] = useState([]);
+    // State to store the current user input
+    const [input, setInput] = useState('');
+    // State to manage loading indicator during API calls
+    const [isLoading, setIsLoading] = useState(false);
+    // Ref to scroll to the bottom of the chat messages
+    const messagesEndRef = useRef(null);
+
+    // State for Speech Recognition (Voice Input)
+    const [isListening, setIsListening] = useState(false);
+    const recognitionRef = useRef(null);
+    const [recognitionLanguage, setRecognitionLanguage] = useState('mr-IN'); // Default to Marathi
+
+    // State for Speech Synthesis (Voice Output)
+    const [isSpeaking, setIsSpeaking] = useState(false);
+    const synthesisRef = useRef(null);
+    const [synthesisLanguage, setSynthesisLanguage] = useState('mr-IN'); // Default to Marathi
+    const [voicesLoaded, setVoicesLoaded] = useState(false); // New state to track if voices are loaded
+    const [initialGreetingSpoken, setInitialGreetingSpoken] = useState(false); // New state to ensure greeting is spoken once
+
+    // List of supported languages for voice input/output
+    const supportedLanguages = [
+        { code: 'mr-IN', name: 'मराठी (Marathi)' },
+        { code: 'en-US', name: 'English (US)' },
+        { code: 'hi-IN', name: 'हिंदी (Hindi)' },
+        { code: 'gu-IN', name: 'ગુજરાતી (Gujarati)' },
+        { code: 'ta-IN', name: 'தமிழ் (Tamil)' },
+        { code: 'te-IN', name: 'తెలుగు (Telugu)' },
+        { code: 'kn-IN', name: 'ಕನ್ನಡ (Kannada)' },
+        { code: 'bn-IN', name: 'বাংলা (Bengali)' },
+    ];
+
+    // Initialize Speech Recognition and Synthesis on component mount
+    useEffect(() => {
+        // Initialize Speech Recognition
+        if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            recognitionRef.current = new SpeechRecognition();
+            recognitionRef.current.continuous = false; // Listen for a single utterance
+            recognitionRef.current.interimResults = false; // Only return final results
+            recognitionRef.current.lang = recognitionLanguage;
+
+            recognitionRef.current.onstart = () => {
+                setIsListening(true);
+                console.log('Voice recognition started...');
+            };
+
+            recognitionRef.current.onresult = (event) => {
+                const transcript = event.results[0][0].transcript;
+                setInput(transcript); // Set the recognized text as input
+                console.log('Recognized:', transcript);
+                setIsListening(false);
+                // Automatically send message after recognition
+                if (transcript.trim() !== '') {
+                    sendMessage(transcript);
+                }
+            };
+
+            recognitionRef.current.onerror = (event) => {
+                console.error('Speech recognition error:', event.error);
+                setIsListening(false);
+                // Display a message to the user if an error occurs
+                setMessages((prevMessages) => [...prevMessages, { text: 'आवाज ओळखण्यात समस्या आली. कृपया पुन्हा प्रयत्न करा.', sender: 'bot' }]);
+            };
+
+            recognitionRef.current.onend = () => {
+                setIsListening(false);
+                console.log('Voice recognition ended.');
+            };
+        } else {
+            console.warn('Speech Recognition not supported in this browser.');
+            // Inform the user if the feature is not supported
+            setMessages((prevMessages) => [...prevMessages, { text: 'तुमच्या ब्राउझरमध्ये आवाज ओळखण्याची सुविधा उपलब्ध नाही.', sender: 'bot' }]);
+        }
+
+        // Initialize Speech Synthesis
+        synthesisRef.current = window.speechSynthesis;
+
+        // Function to handle voices being loaded
+        const handleVoicesLoaded = () => {
+            setVoicesLoaded(true);
+            console.log('Speech synthesis voices loaded:', synthesisRef.current.getVoices());
+            // Speak the initial greeting only once after voices are loaded
+            if (!initialGreetingSpoken && messages.length > 0 && messages[0].sender === 'bot') {
+                speakText(messages[0].text);
+                setInitialGreetingSpoken(true); // Mark as spoken
+            }
+        };
+
+        // Listen for voices to be loaded
+        if (synthesisRef.current) {
+            synthesisRef.current.onvoiceschanged = handleVoicesLoaded;
+            // Check if voices are already loaded on initial render
+            if (synthesisRef.current.getVoices().length > 0) {
+                handleVoicesLoaded();
+            }
+        }
+
+        // Initial greeting message when the component mounts (text only, spoken later)
+        setMessages([
+            {
+                text: 'नमस्कार! मी तुमचा डिजिटल सेवा पॉइंट सहाय्यक आहे. मी तुम्हाला महाराष्ट्र सरकारच्या विविध ऑनलाइन सेवांबद्दल माहिती देऊ शकेन. तुम्हाला कोणत्या सेवेबद्दल माहिती हवी आहे? (उदा. आधार कार्ड, पॅन कार्ड, शिधापत्रिका, जन्म दाखला, उत्पन्न दाखला, जातीचा दाखला)',
+                sender: 'bot'
+            }
+        ]);
+    }, [recognitionLanguage, initialGreetingSpoken]); // Add initialGreetingSpoken to dependencies
+
+    // Update synthesis language when it changes
+    useEffect(() => {
+        if (synthesisRef.current && synthesisRef.current.speaking) {
+            synthesisRef.current.cancel(); // Stop current speech if language changes mid-speech
+            setIsSpeaking(false);
+        }
+    }, [synthesisLanguage]);
+
+
+    // Scroll to the latest message whenever messages state updates
+    useEffect(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [messages]);
+
+    // Function to send a message (user or bot)
+    const sendMessage = async (textToSend = input) => {
+        if (textToSend.trim() === '') return;
+
+        const userMessage = { text: textToSend, sender: 'user' };
+        setMessages((prevMessages) => [...prevMessages, userMessage]);
+        setInput('');
+        setIsLoading(true);
+
+        try {
+            // Construct the prompt for the Gemini API
+            const prompt = `तुम्ही महाराष्ट्र सरकारच्या ऑनलाइन सेवांबद्दल माहिती देणारे 'डिजिटल सेवा पॉइंट' नावाचे मराठी चॅटबॉट आहात. वापरकर्त्याच्या प्रश्नांची उत्तरे मराठीत द्या. प्रत्येक सेवेसाठी आवश्यक कागदपत्रे, अर्ज प्रक्रिया, पात्रता निकष आणि अंदाजे वेळ व शुल्क याबद्दल माहिती द्या.
+
+खालील सेवांबद्दल माहिती उपलब्ध आहे:
+
+**आधार कार्ड (Aadhaar Card):**
+* **आवश्यक कागदपत्रे:** ओळखपत्र (उदा. पॅन, पासपोर्ट, ड्रायव्हिंग लायसन्स), पत्त्याचा पुरावा (उदा. वीज बिल, पाणी बिल, बँक स्टेटमेंट), जन्मतारीख पुरावा (उदा. जन्म दाखला, शाळा सोडल्याचा दाखला).
+* **अर्ज प्रक्रिया:** जवळच्या आधार नोंदणी केंद्राला भेट द्या, फॉर्म भरा, बायोमेट्रिक्स द्या, आणि पोचपावती घ्या. स्थिती ऑनलाइन तपासता येते.
+* **पात्रता निकष:** कोणताही भारतीय रहिवासी.
+* **अंदाजे वेळ आणि शुल्क:** पहिल्या नोंदणीसाठी विनामूल्य, अद्यतनांसाठी/दुरुस्तीसाठी शुल्क लागू. वेळ बदलू शकते.
+
+**पॅन कार्ड (PAN Card):**
+* **आवश्यक कागदपत्रे:** ओळखपत्र, पत्त्याचा पुरावा, जन्मतारीख पुरावा.
+* **अर्ज प्रक्रिया:** NSDL/UTIITSL वेबसाइटद्वारे ऑनलाइन अर्ज करा किंवा ऑफलाइन अर्ज करा.
+* **पात्रता निकष:** भारतात कर भरण्यास पात्र असलेली कोणतीही व्यक्ती.
+* **अंदाजे वेळ आणि शुल्क:** अंदाजे १५-२० दिवस, शुल्क लागू.
+
+**शिधापत्रिका (Ration Card):**
+* **आवश्यक कागदपत्रे:** ओळखपत्र, पत्त्याचा पुरावा, विवाह प्रमाणपत्र (लागू असल्यास), मागील शिधापत्रिकेचे समर्पण प्रमाणपत्र (लागू असल्यास).
+* **अर्ज प्रक्रिया:** तहसीलदार/तलाठी कार्यालयात किंवा महाफूड वेबसाइटवर ऑनलाइन अर्ज करा.
+* **पात्रता निकष:** महाराष्ट्र शासनाच्या सार्वजनिक वितरण प्रणालीच्या (PDS) नियमांनुसार महाराष्ट्राचे रहिवासी.
+* **अंदाजे वेळ आणि शुल्क:** वेळ बदलते, किमान शुल्क लागू.
+
+**जन्म दाखला (Birth Certificate):**
+* **आवश्यक कागदपत्रे:** रुग्णालयातील डिस्चार्ज सारांश, पालकांचे ओळखपत्र.
+* **अर्ज प्रक्रिया:** जन्मानंतर २१ दिवसांच्या आत स्थानिक महानगरपालिका/ग्रामपंचायतीत नोंदणी करा.
+* **पात्रता निकष:** महाराष्ट्रात जन्मलेल्यांसाठी.
+* **अंदाजे वेळ आणि शुल्क:** २१ दिवसांच्या आत विनामूल्य, उशिरा नोंदणीसाठी शुल्क लागू.
+
+**उत्पन्न दाखला (Income Certificate):**
+* **आवश्यक कागदपत्रे:** उत्पन्नाचा पुरावा (पगार स्लिप, आयकर रिटर्न), रहिवासी पुरावा, प्रतिज्ञापत्र.
+* **अर्ज प्रक्रिया:** महाऑनलाइन/सेतू केंद्राद्वारे ऑनलाइन अर्ज करा किंवा तहसीलदार कार्यालयात ऑफलाइन अर्ज करा.
+* **पात्रता निकष:** महाराष्ट्राचे रहिवासी ज्यांना विविध योजनांसाठी उत्पन्नाच्या पुराव्याची आवश्यकता आहे.
+* **अंदाजे वेळ आणि शुल्क:** अंदाजे ७-१५ दिवस, शुल्क लागू.
+
+**जातीचा दाखला (Caste Certificate):**
+* **आवश्यक कागदपत्रे:** पूर्वजांचा जातीचा पुरावा, रहिवासी पुरावा, प्रतिज्ञापत्र, शाळा सोडल्याचा दाखला.
+* **अर्ज प्रक्रिया:** महाऑनलाइन/सेतू केंद्राद्वारे ऑनलाइन अर्ज करा किंवा तहसीलदार कार्यालयात ऑफलाइन अर्ज करा.
+* **पात्रता निकष:** महाराष्ट्रातील मान्यताप्राप्त जाती/जमातींमधील व्यक्ती.
+* **अंदाजे वेळ आणि शुल्क:** अंदाजे १५-३० दिवस, शुल्क लागू.
+
+वापरकर्त्याचा प्रश्न: ${userMessage.text}
+या प्रश्नाचे उत्तर मराठीत, वरील माहितीचा वापर करून द्या. जर माहिती उपलब्ध नसेल, तर नम्रपणे सांगा की तुम्ही त्याबद्दल माहिती देऊ शकत नाही.
+`;
+
+            let chatHistory = [];
+            chatHistory.push({ role: "user", parts: [{ text: prompt }] });
+
+            const payload = { contents: chatHistory };
+            const apiKey = ""; // API key is provided by the Canvas environment
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
+            const response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            const result = await response.json();
+
+            if (result.candidates && result.candidates.length > 0 &&
+                result.candidates[0].content && result.candidates[0].content.parts &&
+                result.candidates[0].content.parts.length > 0) {
+                const botResponseText = result.candidates[0].content.parts[0].text;
+                setMessages((prevMessages) => [...prevMessages, { text: botResponseText, sender: 'bot' }]);
+                speakText(botResponseText); // Speak the bot's response
+            } else {
+                const errorMessage = 'माहिती उपलब्ध नाही. कृपया वेगळा प्रश्न विचारा.';
+                setMessages((prevMessages) => [...prevMessages, { text: errorMessage, sender: 'bot' }]);
+                speakText(errorMessage);
+                console.error('Unexpected API response structure:', result);
+            }
+        } catch (error) {
+            console.error('Error fetching from Gemini API:', error);
+            const errorMessage = 'माहिती मिळवताना काहीतरी चूक झाली. कृपया पुन्हा प्रयत्न करा.';
+            setMessages((prevMessages) => [...prevMessages, { text: errorMessage, sender: 'bot' }]);
+            speakText(errorMessage);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    // Function to start/stop speech recognition
+    const toggleListening = () => {
+        if (recognitionRef.current) {
+            if (isListening) {
+                recognitionRef.current.stop();
+            } else {
+                recognitionRef.current.start();
+            }
+        }
+    };
+
+    // Function to speak text
+    const speakText = (text) => {
+        if (!synthesisRef.current) {
+            console.warn('SpeechSynthesis not available in this browser.');
+            setMessages((prevMessages) => [...prevMessages, { text: 'तुमच्या ब्राउझरमध्ये आवाज आउटपुटची सुविधा उपलब्ध नाही.', sender: 'bot' }]);
+            return;
+        }
+        if (!voicesLoaded) {
+            console.warn('Speech synthesis voices not yet loaded. Cannot speak:', text);
+            // Optionally, queue the message or try again after a delay
+            return;
+        }
+        if (synthesisRef.current.getVoices().length === 0) {
+            console.error('No speech synthesis voices found on this system.');
+            setMessages((prevMessages) => [...prevMessages, { text: 'तुमच्या सिस्टमवर आवाज आउटपुटसाठी कोणतीही आवाज उपलब्ध नाही.', sender: 'bot' }]);
+            return;
+        }
+
+        if (synthesisRef.current.speaking) {
+            synthesisRef.current.cancel(); // Stop any ongoing speech
+        }
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = synthesisLanguage; // Set the language for synthesis
+        utterance.onstart = () => setIsSpeaking(true);
+        utterance.onend = () => setIsSpeaking(false);
+        utterance.onerror = (event) => {
+            console.error('Speech synthesis error:', event);
+            setIsSpeaking(false);
+            setMessages((prevMessages) => [...prevMessages, { text: 'आवाज आउटपुटमध्ये समस्या आली. कृपया पुन्हा प्रयत्न करा.', sender: 'bot' }]);
+        };
+        synthesisRef.current.speak(utterance);
+    };
+
+    // Handle Enter key press in the input field
+    const handleKeyPress = (e) => {
+        if (e.key === 'Enter') {
+            sendMessage();
+        }
+    };
+
+    return (
+        <div className="min-h-screen bg-gradient-to-br from-blue-100 to-purple-100 flex items-center justify-center p-4 font-sans">
+            <div className="w-full max-w-2xl bg-white rounded-xl shadow-lg flex flex-col h-[80vh] overflow-hidden">
+                {/* Chatbot Header */}
+                <div className="bg-blue-600 text-white p-4 rounded-t-xl flex items-center justify-between">
+                    {/* Logo Image */}
+                    <img
+                        src="https://placehold.co/60x60/1A2B4C/FF8C00?text=%CE%A9" // Placeholder URL for the logo (dark blue background, orange omega symbol)
+                        alt="Digital Service Point Logo"
+                        className="h-12 w-12 rounded-full mr-3" // Adjust size and add margin
+                        onError={(e) => { e.target.onerror = null; e.target.src="https://placehold.co/60x60/AAAAAA/FFFFFF?text=Error"; }} // Fallback for image loading error
+                    />
+                    <h1 className="text-2xl font-bold flex-grow">Digital Service Point</h1> {/* Flex-grow to push icon to the right */}
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor" className="w-8 h-8 text-white">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M8.625 12a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H8.25m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H12m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H16.5m-1.5 2.25h.75m-7.5-10.875Z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M18.75 16.5c.905 0 1.807.083 2.7.253v1.345c0 1.414-.902 2.573-2.007 2.912a12.355 12.355 0 0 1-6.486 0 2.25 2.25 0 0 1-2.007-2.912V16.75c.893-.17 1.795-.253 2.7-.253h4.5Z" />
+                    </svg>
+                </div>
+
+                {/* Voice Assistant Language Selection */}
+                <div className="p-2 bg-gray-100 border-b border-gray-200 flex items-center justify-center space-x-2">
+                    <label htmlFor="recognition-lang" className="text-sm text-gray-700">Voice Input Language:</label>
+                    <select
+                        id="recognition-lang"
+                        className="p-1 rounded-md border border-gray-300 text-sm"
+                        value={recognitionLanguage}
+                        onChange={(e) => setRecognitionLanguage(e.target.value)}
+                    >
+                        {supportedLanguages.map(lang => (
+                            <option key={lang.code} value={lang.code}>{lang.name}</option>
+                        ))}
+                    </select>
+                    <label htmlFor="synthesis-lang" className="text-sm text-gray-700">Voice Output Language:</label>
+                    <select
+                        id="synthesis-lang"
+                        className="p-1 rounded-md border border-gray-300 text-sm"
+                        value={synthesisLanguage}
+                        onChange={(e) => setSynthesisLanguage(e.target.value)}
+                    >
+                        {supportedLanguages.map(lang => (
+                            <option key={lang.code} value={lang.code}>{lang.name}</option>
+                        ))}
+                    </select>
+                </div>
+
+
+                {/* Chat Messages Area */}
+                <div className="flex-1 p-4 overflow-y-auto space-y-4 bg-gray-50">
+                    {messages.map((msg, index) => (
+                        <div
+                            key={index}
+                            className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
+                        >
+                            <div
+                                className={`max-w-[80%] p-3 rounded-xl shadow-md ${
+                                    msg.sender === 'user'
+                                        ? 'bg-blue-500 text-white rounded-br-none'
+                                        : 'bg-gray-200 text-gray-800 rounded-bl-none'
+                                }`}
+                            >
+                                {msg.text}
+                            </div>
+                        </div>
+                    ))}
+                    {/* Loading indicator */}
+                    {isLoading && (
+                        <div className="flex justify-start">
+                            <div className="max-w-[80%] p-3 rounded-xl shadow-md bg-gray-200 text-gray-800 rounded-bl-none">
+                                <div className="flex items-center space-x-2">
+                                    <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce delay-0"></div>
+                                    <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce delay-100"></div>
+                                    <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce delay-200"></div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                    <div ref={messagesEndRef} /> {/* For auto-scrolling */}
+                </div>
+
+                {/* Message Input and Send Button */}
+                <div className="p-4 border-t border-gray-200 flex items-center bg-white rounded-b-xl">
+                    <input
+                        type="text"
+                        className="flex-1 p-3 border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500 transition duration-200"
+                        placeholder="तुमचा प्रश्न येथे टाइप करा..."
+                        value={input}
+                        onChange={(e) => setInput(e.target.value)}
+                        onKeyPress={handleKeyPress}
+                        disabled={isLoading}
+                    />
+                    {/* Voice Input Button */}
+                    <button
+                        className={`ml-3 p-3 rounded-full transition duration-200 ${
+                            isListening ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'
+                        } text-white focus:outline-none focus:ring-2 focus:ring-offset-2 ${
+                            isListening ? 'focus:ring-red-500' : 'focus:ring-green-500'
+                        } disabled:opacity-50 disabled:cursor-not-allowed`}
+                        onClick={toggleListening}
+                        disabled={isLoading || !recognitionRef.current}
+                        title={isListening ? 'Stop Listening' : 'Start Listening'}
+                    >
+                        {isListening ? (
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor" className="w-6 h-6">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 9.75l4.5 4.5m0-4.5l-4.5 4.5M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+                            </svg>
+                        ) : (
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor" className="w-6 h-6">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V8.25a3 3 0 0 1 3-3h.002a3 3 0 0 1 3 3v4.5a3 3 0 0 1-3 3Z" />
+                            </svg>
+                        )}
+                    </button>
+
+                    {/* Send Button */}
+                    <button
+                        className="ml-3 p-3 bg-blue-600 text-white rounded-full hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                        onClick={() => sendMessage()}
+                        disabled={isLoading || input.trim() === ''}
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor" className="w-6 h-6">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 12 3.269 3.125A59.769 59.769 0 0 1 21.485 12 59.768 59.768 0 0 1 3.27 20.875L5.999 12Zm0 0h7.5" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+export default App;
